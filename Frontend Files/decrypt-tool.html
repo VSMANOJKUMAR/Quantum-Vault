@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Vault Decryptor</title>
+  <style>
+    body { font-family: monospace; background: #0a0b0f; color: #e8eaf0; padding: 30px; }
+    input, textarea { width: 100%; padding: 10px; margin: 8px 0 16px;
+      background: #1e2330; border: 1px solid #333; color: #e8eaf0;
+      border-radius: 6px; font-family: monospace; font-size: 13px; }
+    button { padding: 10px 24px; background: #4f7cff; border: none;
+      border-radius: 6px; color: #fff; font-size: 14px; cursor: pointer; }
+    pre { background: #1e2330; padding: 16px; border-radius: 8px;
+      border: 1px solid #333; white-space: pre-wrap; word-break: break-all;
+      margin-top: 16px; color: #22d3a3; }
+    label { font-size: 12px; color: #7b82a0; text-transform: uppercase;
+      letter-spacing: 0.8px; }
+  </style>
+</head>
+<body>
+<h2 style="color:#4f7cff">🔐 QuantumVault Decryptor</h2>
+<p style="color:#7b82a0;margin-bottom:24px">
+  Paste an encrypted blob from H2 database and your master password to decrypt it.
+</p>
+
+<label>Master Password</label>
+<input type="password" id="master-pw" placeholder="Your master password">
+
+<label>Email (used as salt)</label>
+<input type="text" id="email" placeholder="you@example.com">
+
+<label>Encrypted Blob (from VAULT_ENTRIES.ENCRYPTED_BLOB column)</label>
+<textarea id="blob" rows="4"
+          placeholder="Paste the full encrypted blob here e.g. a3f9b2c1...:8d4e7f2a1b..."></textarea>
+
+<button onclick="decrypt()">🔓 Decrypt</button>
+
+<pre id="result">Result will appear here...</pre>
+
+<script>
+  async function deriveKey(password, email) {
+    const enc = new TextEncoder();
+    const keyMaterial = await window.crypto.subtle.importKey(
+      'raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']
+    );
+    return window.crypto.subtle.deriveKey(
+      {
+        name: 'PBKDF2',
+        salt: enc.encode('qv_salt_' + email),
+        iterations: 600000,
+        hash: 'SHA-256'
+      },
+      keyMaterial,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['encrypt', 'decrypt']
+    );
+  }
+
+  async function decrypt() {
+    const password = document.getElementById('master-pw').value;
+    const email    = document.getElementById('email').value.trim();
+    const blob     = document.getElementById('blob').value.trim();
+    const result   = document.getElementById('result');
+
+    if (!password || !email || !blob) {
+      result.textContent = 'Please fill in all three fields.';
+      result.style.color = '#f43f5e';
+      return;
+    }
+
+    result.textContent = 'Deriving key... please wait (this takes a few seconds)';
+    result.style.color = '#f59e0b';
+
+    try {
+      const key = await deriveKey(password, email);
+
+      const [ivHex, ctHex] = blob.split(':');
+      const fromHex = h => new Uint8Array(h.match(/.{2}/g).map(b => parseInt(b, 16)));
+
+      const plaintext = await window.crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv: fromHex(ivHex) },
+        key,
+        fromHex(ctHex)
+      );
+
+      const decoded = new TextDecoder().decode(plaintext);
+      const parsed  = JSON.parse(decoded);
+
+      result.style.color = '#22d3a3';
+      result.textContent = '✅ Decrypted successfully:\n\n' +
+        JSON.stringify(parsed, null, 2);
+
+    } catch (e) {
+      result.style.color = '#f43f5e';
+      result.textContent = '❌ Decryption failed.\n\nPossible reasons:\n' +
+        '• Wrong master password\n' +
+        '• Wrong email\n' +
+        '• Blob is corrupted or incomplete\n\n' +
+        'Error: ' + e.message;
+    }
+  }
+</script>
+</body>
+</html>
